@@ -1,0 +1,19 @@
+{
+  "name": "soc-alert-engine",
+  "version": "1.0.0",
+  "description": "Event-driven SOC alert engine that processes monitoring events from multiple sources and sends alerts via WhatsApp and phone calls.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "Frank ANdrade",
+  "license": "ISC",
+  "dependencies": {
+    "dotenv": "^17.3.1",
+    "node-cron": "^4.2.1",
+    "ssh2": "^1.17.0",
+    "winston": "^3.19.0"
+  }
+}
