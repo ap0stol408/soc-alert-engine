@@ -1,13 +1,5 @@
 /**
  * Main entry point for the SOC Alert Engine.
- *
- * Responsibilities:
- * - Poll Nagios status.dat from multiple monitoring nodes
- * - Parse service states
- * - Detect state transitions using the state manager
- * - Generate alert or recovery messages
- * - Apply notification rate limits
- * - Poll email inbox for alert subjects
  */
 
 require('dotenv').config();
@@ -27,22 +19,19 @@ const {
   buildRecoveryMessage
 } = require('./core/messageBuilder');
 
-/**
- * Email alert poller
- */
 const { pollEmailAlerts } = require('./pollers/emailPoller');
 
-
 /**
- * Indicates if the engine is performing the initial baseline.
- * During the first run, existing alerts are registered but not notified.
+ * Twilio adapter
  */
+const { sendWhatsApp } = require('./adapters/twilioClient');
+
+
 let firstRun = true;
 
 
 /**
  * Process email alerts detected by the email poller.
- * Each email alert is treated as a single event.
  */
 async function processEmailAlert(event) {
 
@@ -56,29 +45,13 @@ Subject: ${event.subject}
 Type: ${event.type}
 `.trim() + '\n';
 
-  const callMessage = `
-📞 CALL ALERT [EMAIL]
+  await sendWhatsApp(message);
 
-Source: EMAIL
-Subject: ${event.subject}
-Type: ${event.type}
-`.trim() + '\n';
-
-  console.log(message);
-  console.log(callMessage);
-
-  /**
-   * Later this will be replaced with:
-   * sendWhatsApp(message)
-   * makeCall(callMessage)
-   */
 }
 
 
 /**
  * Main polling routine executed periodically.
- * Retrieves Nagios status, processes service states,
- * and checks for email-based alerts.
  */
 async function poll() {
 
@@ -86,25 +59,16 @@ async function poll() {
 
     console.log('Polling Nagios...');
 
-    /**
-     * Retrieve status.dat from the Saturno monitoring node
-     */
     const saturnoData = await fetchNagiosStatus(
       process.env.SATURNO,
       process.env.NAGIOS_SATURNO_PATH
     );
 
-    /**
-     * Retrieve status.dat from the Venus monitoring node
-     */
     const venusData = await fetchNagiosStatus(
       process.env.VENUS,
       process.env.NAGIOS_VENUS_PATH
     );
 
-    /**
-     * Parse services and tag their source node
-     */
     const saturnoServices = parseServices(saturnoData).map(s => ({
       ...s,
       source: 'saturno'
@@ -115,26 +79,13 @@ async function poll() {
       source: 'venus'
     }));
 
-
-    /**
-     * Combine services from both monitoring nodes
-     */
     const services = [...saturnoServices, ...venusServices];
 
-
-    /**
-     * Only HARD states are considered for alerting.
-     * SOFT states are ignored to avoid noise.
-     */
     const hardServices = services.filter(
       service => service.state_type === '1'
     );
 
 
-    /**
-     * Initial baseline.
-     * Existing problems are registered but alerts are not sent.
-     */
     if (firstRun) {
 
       console.log('Initial snapshot taken. Building baseline...');
@@ -145,20 +96,16 @@ async function poll() {
 
     } else {
 
-      /**
-       * Evaluate each service state and trigger alerts if necessary.
-       */
-      hardServices.forEach(service => {
+      for (const service of hardServices) {
 
         const result = evaluateService(service);
 
-        if (!result) return;
+        if (!result) continue;
 
         const now = Date.now();
 
         /**
-         * CRITICAL state handling.
-         * Triggers both message and call notifications.
+         * CRITICAL
          */
         if (result.state === '2' && !result.acknowledged) {
 
@@ -166,7 +113,7 @@ async function poll() {
 
             const message = buildAlertMessage(service, result, 'message');
 
-            console.log(message);
+            await sendWhatsApp(message);
 
             updateMessageTimestamp(result.key);
 
@@ -176,7 +123,7 @@ async function poll() {
 
             const callMessage = buildAlertMessage(service, result, 'call');
 
-            console.log(callMessage);
+            await sendWhatsApp(callMessage);
 
             updateCallTimestamp(result.key);
 
@@ -184,10 +131,8 @@ async function poll() {
 
         }
 
-
         /**
-         * WARNING state handling.
-         * Only message alerts are sent.
+         * WARNING
          */
         if (result.state === '1' && !result.acknowledged) {
 
@@ -195,7 +140,7 @@ async function poll() {
 
             const message = buildAlertMessage(service, result, 'message');
 
-            console.log(message);
+            await sendWhatsApp(message);
 
             updateMessageTimestamp(result.key);
 
@@ -203,34 +148,29 @@ async function poll() {
 
         }
 
-
         /**
-         * Recovery detection.
-         * Sent when a service returns to OK state.
+         * RECOVERY
          */
         if (result.state === '0' && result.recovered) {
 
           const recoveryMessage = buildRecoveryMessage(service, result);
 
-          console.log(recoveryMessage);
+          await sendWhatsApp(recoveryMessage);
 
           updateMessageTimestamp(result.key);
 
         }
 
-      });
+      }
 
     }
 
-
     /**
-     * Poll email inbox for new alerts.
-     * Each detected email alert is processed as an event.
+     * Email alerts
      */
     console.log("Polling Email alerts...");
 
     await pollEmailAlerts(processEmailAlert);
-
 
   } catch (error) {
 
@@ -241,12 +181,6 @@ async function poll() {
 }
 
 
-/**
- * Poll the system every minute.
- * This includes:
- * - Nagios alerts
- * - Email alerts
- */
 cron.schedule('*/1 * * * *', poll);
 
 console.log('SOC Alert Engine started...');
