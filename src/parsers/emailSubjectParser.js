@@ -44,6 +44,14 @@ const alertRules = [
   {
     match: "Splunk Alert: Anomalia en Eventos fuera de la media en MMXMTZRPFW01 - Horario laboral L-V",
     alert_type: "splunk_firewall_anomaly_events"
+  },
+  {
+    match: "is DOWN",
+    alert_type: "nagios_host_down"
+  },
+  {
+    match: "is CRITICAL",
+    alert_type: "nagios_service_critical"
   }
 
 ];

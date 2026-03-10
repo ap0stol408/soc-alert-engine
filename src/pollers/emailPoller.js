@@ -4,7 +4,8 @@ Email Poller
 This module connects to the IMAP server and periodically checks
 for new emails in the INBOX.
 
-It uses IMAP UID tracking to ensure emails are not processed twice.
+On startup it generates a summary of backlog alerts instead of
+sending one message per email.
 */
 
 const fs = require("fs");
@@ -76,6 +77,7 @@ async function pollEmailAlerts(processAlert) {
       user: process.env.IMAP_USER,
       pass: process.env.IMAP_PASS
     },
+
     logger: false
   });
 
@@ -115,58 +117,102 @@ async function pollEmailAlerts(processAlert) {
     const startUID = state.lastUID + 1;
     const endUID = uidNext - 1;
 
-    /*
-    Prevent invalid message range
-    */
-    if (startUID > endUID) {
-
-      await client.logout();
-      return;
-
-    }
-
     console.log(`Checking emails UID ${startUID} -> ${endUID}`);
+
+    let summary = [];
+    let lastProcessedUID = state.lastUID;
 
     /*
     Fetch new emails
     */
-    try {
+    for await (let message of client.fetch(
+      { uid: `${startUID}:*` },
+      { envelope: true, internalDate: true }
+    )) {
 
-      for await (let message of client.fetch(
-        { uid: `${startUID}:*` },
-        { envelope: true }
-      )) {
+      const subject = message.envelope.subject || "";
+      const date = message.internalDate;
 
-        const subject = message.envelope.subject || "";
+      const alert = detectEmailAlert(subject);
 
-        const alert = detectEmailAlert(subject);
+      if (alert) {
 
-        if (alert) {
-
-          console.log("Email alert detected:", subject);
-
-          const event = {
-
-            source: "email",
-            subject: subject,
-            type: alert.alert_type,
-            uid: message.uid
-
-          };
-
-          await processAlert(event);
-
-        }
-
-        state.lastUID = message.uid;
+        summary.push({
+          date,
+          subject
+        });
 
       }
 
-    } catch (err) {
-
-      console.error("IMAP fetch error:", err.message);
+      lastProcessedUID = message.uid;
 
     }
+
+    /*
+    If backlog exists → send summary instead of individual alerts
+    */
+    if (summary.length > 0) {
+
+      console.log(`Backlog detected (${summary.length} alerts). Sending summary.`);
+
+      const totalAlerts = summary.length;
+
+      /*
+      Take last 20 alerts
+      */
+      let recentAlerts = summary.slice(-20);
+
+      function buildMessage(alertList) {
+
+        const lines = alertList.map(a => {
+
+          const formattedDate =
+            a.date.toLocaleString('sv-SE', {
+            timeZone: 'America/Mexico_City',
+            hour12: false
+          }).substring(0,16);
+
+          return `${formattedDate} - ${a.subject}`;
+
+        });
+
+        return `
+📊 SOC ALERT SUMMARY
+
+Showing last ${alertList.length} alerts (${totalAlerts} total)
+
+${lines.join("\n")}
+`.trim() + "\n";
+
+      }
+
+      let message = buildMessage(recentAlerts);
+
+      /*
+      Twilio limit protection (1600 chars)
+      */
+      if (message.length > 1600) {
+
+        console.log("Summary too long, reducing to last 10 alerts.");
+
+        recentAlerts = summary.slice(-10);
+
+        message = buildMessage(recentAlerts);
+
+      }
+
+      await processAlert({
+        source: "email_summary",
+        subject: message,
+        type: "summary"
+      });
+
+    }
+
+    /*
+    Update state
+    */
+    state.lastUID = lastProcessedUID;
 
     saveState(state);
 

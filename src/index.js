@@ -37,6 +37,13 @@ async function processEmailAlert(event) {
 
   console.log("EMAIL ALERT EVENT:", event);
 
+  if (event.type === "summary") {
+
+    await sendWhatsApp(event.subject);
+    return;
+
+  }
+
   const message = `
 📩 WHATSAPP ALERT [EMAIL]
 
